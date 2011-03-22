@@ -28,23 +28,20 @@ import org.apache.oozie.DagELFunctions;
 import org.apache.oozie.WorkflowActionBean;
 import org.apache.oozie.WorkflowJobBean;
 import org.apache.oozie.action.ActionExecutor;
+import org.apache.oozie.client.OozieClient;
 import org.apache.oozie.client.WorkflowAction;
 import org.apache.oozie.client.WorkflowJob;
 import org.apache.oozie.command.CommandException;
-import org.apache.oozie.service.CallbackService;
-import org.apache.oozie.service.ELService;
-import org.apache.oozie.service.HadoopAccessorException;
-import org.apache.oozie.service.HadoopAccessorService;
-import org.apache.oozie.service.Services;
+import org.apache.oozie.service.*;
 import org.apache.oozie.store.StoreException;
 import org.apache.oozie.store.WorkflowStore;
-import org.apache.oozie.util.ELEvaluator;
-import org.apache.oozie.util.Instrumentation;
-import org.apache.oozie.util.XConfiguration;
-import org.apache.oozie.util.XLog;
+import org.apache.oozie.util.*;
 import org.apache.oozie.workflow.WorkflowException;
 import org.apache.oozie.workflow.WorkflowInstance;
 import org.apache.oozie.workflow.lite.LiteWorkflowInstance;
+import org.jdom.Element;
+import org.jdom.JDOMException;
+import org.jdom.Namespace;
 
 /**
  * Base class for Action execution commands. Provides common functionality to handle different types of errors while
@@ -319,12 +316,31 @@ public abstract class ActionCommand<T> extends WorkflowCommand<Void> {
          */
         public FileSystem getAppFileSystem() throws HadoopAccessorException, IOException, URISyntaxException {
             WorkflowJob workflow = getWorkflow();
+            WorkflowAction action = getAction();
+            String nameNode = null;
+            if (action.getType()!=null && action.getType().equals("map-reduce"))  //for map reduce actions
+            {
+                try {    //ideally the uri for action should be stored as is in the WorkflowAction. Currently, tracker uri, has the string for action uri but not the scheme.
+                    Element actionXml = XmlUtils.parseXml(action.getConf());
+                    Namespace ns = actionXml.getNamespace();
+                    if (actionXml.getChild("name-node", ns)!=null)
+                    {
+                        nameNode = actionXml.getChild("name-node", ns).getTextTrim();
+                        XLog.getLog(getClass()).info("Namenode : " + nameNode);
+                    }
+
+                } catch (JDOMException e) {
+                    throw new IOException(e);
+                }
+            }
             XConfiguration jobConf = new XConfiguration(new StringReader(workflow.getConf()));
             Configuration fsConf = new Configuration();
             XConfiguration.copy(jobConf, fsConf);
-            return Services.get().get(HadoopAccessorService.class).createFileSystem(workflow.getUser(),
-                    workflow.getGroup(), new URI(getWorkflow().getAppPath()), fsConf);
-
+            String appPath = getWorkflow().getAppPath();
+            URI uri = new URI(nameNode != null ? nameNode : appPath);   //if namenode is present (like for map reduce processes, get the file system for that URI)
+            FileSystem fileSystem = Services.get().get(HadoopAccessorService.class).createFileSystem(workflow.getUser(),
+                    workflow.getGroup(), uri, fsConf);
+            return fileSystem;
         }
 
         @Override
